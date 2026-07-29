@@ -1,0 +1,67 @@
+{
+  "project_info": {
+    "project_number": "2938564921",
+    "project_id": "ecommerce-819e4",
+    "storage_bucket": "ecommerce-819e4.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:2938564921:android:8df6ab3465631d9196f8e8",
+        "android_client_info": {
+          "package_name": "com.example.flutter_application_3"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCKgBYj6oGgkMcd7S9LqSOakQxXfEzkqq0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:2938564921:android:232f6a21980ca48c96f8e8",
+        "android_client_info": {
+          "package_name": "com.example.hopistal_management"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCKgBYj6oGgkMcd7S9LqSOakQxXfEzkqq0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:2938564921:android:8b27bf63ee05fc8e96f8e8",
+        "android_client_info": {
+          "package_name": "com.example.talal_todo"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCKgBYj6oGgkMcd7S9LqSOakQxXfEzkqq0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
