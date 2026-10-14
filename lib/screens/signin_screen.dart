@@ -1,25 +1,40 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:get/get.dart';
+import 'package:talal_todo/constants/app_images.dart';
 import 'package:talal_todo/controller.dart/auth_controller.dart';
 import 'package:talal_todo/routes/route_names.dart';
+import 'package:talal_todo/widgets/common_textfield.dart';
+import 'package:talal_todo/widgets/primary_button.dart';
 
- // 1. AuthController import kiya
+class SigninScreen extends StatefulWidget {
+  const SigninScreen({super.key});
 
-import '../widgets/common_textfield.dart';
-import '../widgets/common_container.dart';
+  @override
+  State<SigninScreen> createState() => _SigninScreenState();
+}
 
-class SigninScreen extends StatelessWidget {
-  SigninScreen({super.key});
-
-  // 2. Dependency Injection: AuthController register kiya
-  final AuthController _authController = Get.put(AuthController());
-
+class _SigninScreenState extends State<SigninScreen> {
+  final AuthController _authController = Get.find<AuthController>();
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
-
-  // Name ki jagah Email controller use hoga login ke liye
-  final TextEditingController _emailController = TextEditingController(); 
+  final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+  AutovalidateMode _autovalidateMode = AutovalidateMode.disabled;
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  void _openSignup() {
+    if (Get.previousRoute == RouteNames.signup) {
+      Get.back();
+      return;
+    }
+    Get.toNamed(RouteNames.signup);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -27,27 +42,24 @@ class SigninScreen extends StatelessWidget {
       backgroundColor: Colors.white,
       body: SafeArea(
         child: SingleChildScrollView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 10.h),
             child: Form(
               key: _formKey,
+              autovalidateMode: _autovalidateMode,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Top Corner Back Arrow
-                  GestureDetector(
-                    onTap: () {
-                      Get.toNamed(RouteNames.signup); 
-                    },
-                    child: Icon(Icons.arrow_back_ios_new, size: 24.sp), 
-                  ),
-
+                  if (Navigator.canPop(context))
+                    IconButton(
+                      onPressed: Get.back,
+                      icon: Icon(Icons.arrow_back_ios_new, size: 20.sp),
+                    ),
                   SizedBox(height: 25.h),
-
-                  // Center Text "Welcome Back"
                   Center(
                     child: Text(
-                      "Welcome Back!",
+                      'Welcome Back!',
                       style: TextStyle(
                         fontSize: 28.sp,
                         fontWeight: FontWeight.bold,
@@ -55,63 +67,50 @@ class SigninScreen extends StatelessWidget {
                       ),
                     ),
                   ),
-
                   SizedBox(height: 20.h),
-
-                  // Sign In Screen Picture
                   Center(
                     child: Image.asset(
-                      'assets/images/signin.png', 
+                      AppImages.signin,
                       height: 200.h,
                       fit: BoxFit.contain,
                     ),
                   ),
-
                   SizedBox(height: 30.h),
-
-                  // Email TextField (Updated for Firebase Login)
                   CommonTextField(
                     controller: _emailController,
-                    hintText: "Email Address",
+                    hintText: 'Email Address',
                     keyboardType: TextInputType.emailAddress,
                     prefixIcon: const Icon(Icons.email_outlined, color: Colors.grey),
                     validator: (value) {
                       if (value == null || value.trim().isEmpty) {
-                        return "Please enter your email";
-                      } else if (!GetUtils.isEmail(value.trim())) {
-                        return "Please enter a valid email address";
+                        return 'Please enter your email';
+                      }
+                      if (!GetUtils.isEmail(value.trim())) {
+                        return 'Please enter a valid email address';
                       }
                       return null;
                     },
                   ),
-
                   SizedBox(height: 15.h),
-
-                  // Password TextField
                   CommonTextField(
                     controller: _passwordController,
-                    hintText: "Password",
-                    isPassword: true, 
+                    hintText: 'Password',
+                    isPassword: true,
                     prefixIcon: const Icon(Icons.lock_outline, color: Colors.grey),
                     validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return "Please enter your password";
+                      if (value == null || value.isEmpty) {
+                        return 'Please enter your password';
                       }
                       return null;
                     },
                   ),
-
                   SizedBox(height: 10.h),
-
-                  // Forget Password Text
                   Align(
                     alignment: Alignment.centerRight,
                     child: GestureDetector(
-                      onTap: () {
-                        Get.toNamed(RouteNames.forgotPassword);
-                      },
+                      onTap: () => Get.toNamed(RouteNames.forgotPassword),
                       child: Text(
-                        "Forget password?",
+                        'Forget password?',
                         style: TextStyle(
                           color: Colors.blueAccent,
                           fontSize: 14.sp,
@@ -120,51 +119,28 @@ class SigninScreen extends StatelessWidget {
                       ),
                     ),
                   ),
-
                   SizedBox(height: 30.h),
-
-                  // Sign In Button
-                  CommonContainer(
-                    width: double.infinity,
-                    height: 50.h,
-                    color: Colors.blueAccent,
-                    borderRadius: 12.r,
-                    onTap: () {
-                      if (_formKey.currentState!.validate()) {
-                        // 3. AuthController ka signIn function call kiya
+                  Obx(
+                    () => PrimaryButton(
+                      label: 'Sign In',
+                      isLoading: _authController.isLoading.value,
+                      onPressed: () {
+                        FocusManager.instance.primaryFocus?.unfocus();
+                        final isValid = _formKey.currentState?.validate() ?? false;
+                        if (!isValid) {
+                          setState(() {
+                            _autovalidateMode = AutovalidateMode.onUserInteraction;
+                          });
+                          return;
+                        }
                         _authController.signIn(
                           _emailController.text.trim(),
-                          _passwordController.text.trim(),
+                          _passwordController.text,
                         );
-                      }
-                    },
-                    // 4. Obx lagaya taa ke loading state manage ho sake
-                    child: Center(
-                      child: Obx(() {
-                        return _authController.isLoading.value
-                            ? SizedBox(
-                                height: 24.h,
-                                width: 24.h,
-                                child: const CircularProgressIndicator(
-                                  color: Colors.white,
-                                  strokeWidth: 2.5,
-                                ),
-                              )
-                            : Text(
-                                "Sign In",
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16.sp,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              );
-                      }),
+                      },
                     ),
                   ),
-
                   SizedBox(height: 25.h),
-
-                  // Don't have an account? Sign Up 
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -176,15 +152,13 @@ class SigninScreen extends StatelessWidget {
                         ),
                       ),
                       GestureDetector(
-                        onTap: () {
-                          Get.toNamed(RouteNames.signup);
-                        },
+                        onTap: _openSignup,
                         child: Text(
-                          "Sign up",
+                          'Sign up',
                           style: TextStyle(
                             fontSize: 14.sp,
                             fontWeight: FontWeight.bold,
-                            color: Colors.blueAccent, 
+                            color: Colors.blueAccent,
                           ),
                         ),
                       ),
