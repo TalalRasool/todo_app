@@ -1,4 +1,5 @@
-import 'dart:io';
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -7,91 +8,74 @@ import 'package:get/get.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:talal_todo/routes/route_names.dart';
 import 'package:talal_todo/services/notification_service.dart';
+import 'package:talal_todo/utils/app_snackbar.dart';
+import 'package:talal_todo/utils/time_format.dart';
 
 class TodoController extends GetxController {
-  static TodoController instance = Get.find();
-  
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  var isLoading = false.obs;
+  final isLoading = false.obs;
+  final userName = ''.obs;
+  final profileImageUrl = ''.obs;
+  final isUploading = false.obs;
 
-  // 🔴 1. Name save karne ke liye GetX ka variable (Default khali kar diya hai)
-  RxString userName = "".obs; 
-  
-  // 🔴 Image ka link save karne ke liye variable
-  RxString profileImageUrl = "".obs; 
-  RxBool isUploading = false.obs; // Loading animation ke liye
-
-  // ==========================================
-  // 🔴 APP KHULTE HI CHALNE WALA FUNCTION
-  // ==========================================
   @override
   void onInit() {
     super.onInit();
-    // App open hote hi Name aur Picture Firebase se utha lo
-    fetchUserData(); 
+    fetchUserData();
   }
 
-  // ==========================================
-  // ADD TODO FUNCTION
-  // ==========================================
   Future<void> addTodo(String title, String description) async {
+    if (isLoading.value) return;
+
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) {
+      AppSnackbar.error('Error', 'Please sign in again.');
+      return;
+    }
+
+    final notificationId = DateTime.now().millisecondsSinceEpoch.remainder(
+      1 << 30,
+    );
+
     try {
       isLoading.value = true;
-      
-      // Current user ki ID get karein
-      String uid = _auth.currentUser!.uid;
-      
-      // Current system time get karein task ke liye
-      String timeNow = "${TimeOfDay.now().hour}:${TimeOfDay.now().minute.toString().padLeft(2, '0')} ${TimeOfDay.now().period.name.toUpperCase()}";
-
-      // Firestore mein user ke specific document ke andar 'todos' collection mein data save karein
-      await _firestore.collection('users').doc(uid).collection('todos').add({
-        'title': title,
-        'description': description,
-        'time': timeNow,
-        'createdAt': FieldValue.serverTimestamp(), // Sorting ke kaam aayega
-      });
-
-      // 🔴 12-Hour Notification Set Karna
-      int notificationId = DateTime.now().millisecondsSinceEpoch ~/ 1000; 
-      
-      await NotificationService.scheduleNotification(
-        id: notificationId,
-        title: "Task Reminder 📌",
-        body: "Just checking in on your task: '$title'. If it's completed, don't forget to mark it as done!",
+      // A client timestamp is visible to orderBy immediately. serverTimestamp
+      // stays null until the server answers, so the new task was hidden offline.
+      _writeInBackground(
+        _firestore.collection('users').doc(uid).collection('todos').add({
+          'title': title,
+          'description': description,
+          'time': formatTaskTime(TimeOfDay.now()),
+          'isCompleted': false,
+          'notificationId': notificationId,
+          'createdAt': Timestamp.now(),
+        }),
       );
-
-      Get.snackbar(
-        "Success", 
-        "Task added & reminder set for 12 hours!", 
-        backgroundColor: Colors.green.shade100,
-        colorText: Colors.green.shade900,
-        snackPosition: SnackPosition.BOTTOM,
+      unawaited(
+        NotificationService.scheduleNotification(
+          id: notificationId,
+          title: 'Task reminder',
+          body: "Just checking in on your task: '$title'.",
+        ),
       );
-      
-      Get.offAllNamed(RouteNames.mainscreen);
-      
+      Get.back();
+      AppSnackbar.success('Success', 'Task added successfully');
     } catch (e) {
-      Get.snackbar(
-        "Error", 
-        e.toString(),
-        backgroundColor: Colors.redAccent,
-        colorText: Colors.white, 
-        snackPosition: SnackPosition.BOTTOM,
-      );
+      debugPrint('Could not add task: $e');
+      AppSnackbar.error('Error', 'Could not add the task. Please try again.');
     } finally {
       isLoading.value = false;
     }
   }
 
-  // ==========================================
-  // GET TODOS FUNCTION
-  // ==========================================
-  Stream<QuerySnapshot> getTodos() {
-    String uid = _auth.currentUser!.uid;
-    
+  Stream<QuerySnapshot<Map<String, dynamic>>> getTodos() {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) {
+      return const Stream<QuerySnapshot<Map<String, dynamic>>>.empty();
+    }
+
     return _firestore
         .collection('users')
         .doc(uid)
@@ -99,169 +83,227 @@ class TodoController extends GetxController {
         .orderBy('createdAt', descending: true)
         .snapshots();
   }
-  
-  // ==========================================
-  // DELETE TODO FUNCTION
-  // ==========================================
+
   Future<void> deleteTodo(String docId) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) {
+      AppSnackbar.error('Error', 'Please sign in again.');
+      return;
+    }
+
     try {
-      String uid = _auth.currentUser!.uid;
-
-      await _firestore
-          .collection('users')
-          .doc(uid)
-          .collection('todos')
-          .doc(docId)
-          .delete();
-
-      Get.snackbar(
-        "Deleted", 
-        "Task removed successfully!",
-        backgroundColor: Colors.redAccent,
-        colorText: Colors.white, // Text white kiya taa ke nazar aaye
-        snackPosition: SnackPosition.BOTTOM,
-      );
+      final ref = _todoRef(uid, docId);
+      unawaited(_cancelReminder(ref));
+      _writeInBackground(ref.delete());
+      AppSnackbar.success('Deleted', 'Task removed.');
     } catch (e) {
-      Get.snackbar(
-        "Error", 
-        e.toString(),
-        backgroundColor: Colors.white,
-        colorText: Colors.redAccent,
-      );
+      debugPrint('Could not delete task: $e');
+      AppSnackbar.error('Error', 'Could not delete the task.');
     }
   }
 
-  // ==========================================
-  // UPDATE TODO FUNCTION
-  // ==========================================
   Future<void> updateTodo(String docId, String newTitle, String newDesc) async {
+    if (docId.isEmpty) {
+      AppSnackbar.error('Error', 'This task could not be opened.');
+      return;
+    }
+
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) {
+      AppSnackbar.error('Error', 'Please sign in again.');
+      return;
+    }
+
     try {
-      String uid = _auth.currentUser!.uid;
-
-      await _firestore
-          .collection('users')
-          .doc(uid)
-          .collection('todos')
-          .doc(docId)
-          .update({
-        'title': newTitle,
-        'description': newDesc,
-      });
-
-      Get.back(); 
-      
-      Get.snackbar(
-        "Updated", 
-        "Task updated successfully!",
-        backgroundColor: Colors.green.withValues(), // transparency hata di
-        colorText: Colors.green,
-        snackPosition: SnackPosition.BOTTOM,
+      isLoading.value = true;
+      _writeInBackground(
+        _todoRef(uid, docId).update({
+          'title': newTitle,
+          'description': newDesc,
+        }),
       );
+      Get.back();
+      AppSnackbar.success('Success', 'Task updated successfully');
     } catch (e) {
-      Get.snackbar("Error", e.toString());
+      debugPrint('Could not update task: $e');
+      AppSnackbar.error('Error', 'Could not update the task.');
+    } finally {
+      isLoading.value = false;
     }
   }
 
-  // ==========================================
-  // 🔴 FETCH USER DATA (Name & Image)
-  // ==========================================
   Future<void> fetchUserData() async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) {
+      userName.value = '';
+      profileImageUrl.value = '';
+      return;
+    }
+
+    userName.value = _bestKnownName();
+    final ref = _firestore.collection('users').doc(uid);
+
     try {
-      String uid = _auth.currentUser!.uid;
-      DocumentSnapshot doc = await _firestore.collection('users').doc(uid).get();
-      
-      if (doc.exists && doc.data() != null) {
-        var data = doc.data() as Map<String, dynamic>;
-        if (data.containsKey('name')) {
-          userName.value = data['name']; 
-        }
-        if (data.containsKey('profileImage')) {
-          profileImageUrl.value = data['profileImage']; // Picture ka link UI ko do
-        }
-      }
+      final cached = await ref.get(const GetOptions(source: Source.cache));
+      if (_auth.currentUser?.uid != uid) return;
+      _applyProfile(cached.data());
     } catch (e) {
-      print("Error fetching user data: $e");
+      debugPrint('No cached profile: $e');
+    }
+
+    unawaited(
+      ref.get(const GetOptions(source: Source.server)).then((doc) {
+        if (_auth.currentUser?.uid != uid) return;
+        _applyProfile(doc.data());
+      }).catchError((Object e) {
+        debugPrint('Error fetching user data: $e');
+      }),
+    );
+  }
+
+  void _applyProfile(Map<String, dynamic>? data) {
+    if (data == null) return;
+    final name = _bestKnownName(profileName: data['name'] as String?);
+    if (name.isNotEmpty) userName.value = name;
+    final image = data['profileImage'];
+    if (image is String && image.isNotEmpty) {
+      profileImageUrl.value = image;
     }
   }
 
-  // ==========================================
-  // 🔴 UPDATE USER NAME
-  // ==========================================
+  String _bestKnownName({String? profileName}) {
+    final profile = profileName?.trim() ?? '';
+    if (profile.isNotEmpty) return profile;
+    final display = _auth.currentUser?.displayName?.trim() ?? '';
+    if (display.isNotEmpty) return display;
+    return userName.value.trim();
+  }
+
   Future<void> updateUserName(String newName) async {
-    try {
-      String uid = _auth.currentUser!.uid;
-      
-      await _firestore.collection('users').doc(uid).set({
-        'name': newName,
-      }, SetOptions(merge: true)); 
-      
-      userName.value = newName; 
-      Get.back(); 
-      
-      Get.snackbar("Success", "Name updated successfully!", 
-        backgroundColor: Colors.green.withOpacity(0.1), colorText: Colors.green);
-    } catch (e) {
-      Get.snackbar("Error", e.toString());
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) {
+      AppSnackbar.error('Error', 'Please sign in again.');
+      return;
     }
-  }
 
-  // ==========================================
-  // 🔴 UPLOAD PROFILE PICTURE
-  // ==========================================
-  Future<void> uploadProfilePicture(ImageSource source) async {
+    final name = newName.trim();
+    if (name.isEmpty) {
+      AppSnackbar.error('Error', 'Name cannot be empty.');
+      return;
+    }
+
     try {
-      final ImagePicker picker = ImagePicker();
-      final XFile? image = await picker.pickImage(source: source, imageQuality: 50);
-
-      if (image != null) {
-        isUploading.value = true; 
-        String uid = _auth.currentUser!.uid;
-        File file = File(image.path);
-
-        Reference ref = FirebaseStorage.instance.ref().child('profile_images').child('$uid.jpg');
-        await ref.putFile(file);
-
-        String downloadUrl = await ref.getDownloadURL();
-
-        await _firestore.collection('users').doc(uid).set({
-          'profileImage': downloadUrl,
-        }, SetOptions(merge: true));
-
-        profileImageUrl.value = downloadUrl;
-        isUploading.value = false; 
-        
-        Get.snackbar("Success", "Profile Picture Updated!", 
-            backgroundColor: Colors.green.withOpacity(0.1), colorText: Colors.green);
+      userName.value = name;
+      final user = _auth.currentUser;
+      if (user != null) {
+        unawaited(user.updateDisplayName(name));
       }
+      _writeInBackground(
+        _firestore.collection('users').doc(uid).set({
+          'name': name,
+        }, SetOptions(merge: true)),
+      );
+      AppSnackbar.success('Success', 'Name updated successfully.');
     } catch (e) {
-      isUploading.value = false;
-      Get.snackbar("Error", e.toString());
+      debugPrint('Could not update name: $e');
+      AppSnackbar.error('Error', 'Could not update your name.');
     }
   }
 
-  // ==========================================
-  // LOGOUT FUNCTION
-  // ==========================================
+  Future<void> uploadProfilePicture(ImageSource source) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) {
+      AppSnackbar.error('Error', 'Please sign in again.');
+      return;
+    }
+
+    try {
+      final image = await ImagePicker().pickImage(
+        source: source,
+        imageQuality: 50,
+      );
+      if (image == null) return;
+
+      isUploading.value = true;
+      final bytes = await image.readAsBytes();
+      final ref = FirebaseStorage.instance.ref().child('profile_images/$uid.jpg');
+      await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
+      final downloadUrl = await ref.getDownloadURL();
+
+      await _firestore.collection('users').doc(uid).set({
+        'profileImage': downloadUrl,
+      }, SetOptions(merge: true));
+
+      if (_auth.currentUser?.uid != uid) return;
+      profileImageUrl.value = downloadUrl;
+      AppSnackbar.success('Success', 'Profile picture updated.');
+    } catch (e) {
+      debugPrint('Could not upload profile picture: $e');
+      AppSnackbar.error('Error', 'Could not update your profile picture.');
+    } finally {
+      isUploading.value = false;
+    }
+  }
+
   Future<void> logout() async {
     try {
-      await _auth.signOut(); 
-      Get.offAllNamed(RouteNames.signin); 
+      await _auth.signOut();
+      userName.value = '';
+      profileImageUrl.value = '';
+      isLoading.value = false;
+      isUploading.value = false;
+      Get.offAllNamed(RouteNames.signin);
     } catch (e) {
-      Get.snackbar("Error", e.toString());
+      debugPrint('Logout failed: $e');
+      AppSnackbar.error('Error', 'Could not log out. Please try again.');
     }
   }
 
-  // ==========================================
-  // TASK COMPLETE KARTNE WALA FUNCTION
-  // ==========================================
   Future<void> toggleTaskStatus(String docId, bool currentStatus) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) {
+      AppSnackbar.error('Error', 'Please sign in again.');
+      return;
+    }
+
     try {
-      String uid = _auth.currentUser!.uid;
-      await _firestore.collection('users').doc(uid).collection('todos').doc(docId).update({
-        'isCompleted': !currentStatus,
-      });
+      final ref = _todoRef(uid, docId);
+      final completed = !currentStatus;
+      _writeInBackground(ref.update({'isCompleted': completed}));
+      if (completed) {
+        unawaited(_cancelReminder(ref));
+      }
     } catch (e) {
-      Get.snackbar("Error", "Could not update task status.");
+      debugPrint('Could not update task status: $e');
+      AppSnackbar.error('Error', 'Could not update task status.');
+    }
+  }
+
+  void _writeInBackground<T>(Future<T> write) {
+    unawaited(
+      write.then<void>(
+        (_) {},
+        onError: (Object e, StackTrace _) {
+          debugPrint('Could not sync write: $e');
+        },
+      ),
+    );
+  }
+
+  DocumentReference<Map<String, dynamic>> _todoRef(String uid, String docId) {
+    return _firestore.collection('users').doc(uid).collection('todos').doc(docId);
+  }
+
+  Future<void> _cancelReminder(DocumentReference<Map<String, dynamic>> ref) async {
+    try {
+      final snap = await ref.get();
+      final raw = snap.data()?['notificationId'];
+      final id = raw is int ? raw : (raw is num ? raw.toInt() : null);
+      if (id != null) {
+        await NotificationService.cancel(id);
+      }
+    } catch (e) {
+      debugPrint('Could not cancel reminder: $e');
     }
   }
 }

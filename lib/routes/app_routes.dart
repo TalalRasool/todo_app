@@ -22,18 +22,16 @@ class AppRoutes {
         GetPage(name: RouteNames.onbording, page: () => const OnboardingScreen()),
         
         // Inko baad mein jab banayenge toh un-comment kar lenge
-        GetPage(name: RouteNames.signup, page: () =>   SignupScreen()),
-        GetPage(name: RouteNames.signin, page: () =>   SigninScreen()),
+        GetPage(name: RouteNames.signup, page: () => const SignupScreen()),
+        GetPage(name: RouteNames.signin, page: () => const SigninScreen()),
 
         GetPage(
           name: RouteNames.forgotPassword,
-          page: () =>  ForgetPasswordScreen(),
+          page: () => const ForgetPasswordScreen(),
         ),
-        // GetPage(name: RouteNames.home, page: () => const HomeScreen()),
-        GetPage(name: RouteNames.addlist, page: () => AddlistScreen()),
-        // GetPage(name: RouteNames.showlist, page: () => const ShowListscreen()),
-        GetPage(name: RouteNames.updateTask, page: () =>  UpdateTaskScreen()),
-        GetPage(name: RouteNames.profile, page: () =>  ProfileScreen()),
-        GetPage(name: RouteNames.mainscreen, page: () =>  MainScreen()),
+        GetPage(name: RouteNames.addlist, page: () => const AddlistScreen()),
+        GetPage(name: RouteNames.updateTask, page: () => const UpdateTaskScreen()),
+        GetPage(name: RouteNames.profile, page: () => const ProfileScreen()),
+        GetPage(name: RouteNames.mainscreen, page: () => const MainScreen()),
       ];
 }

@@ -1,30 +1,37 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:talal_todo/main.dart';
-
+import 'package:talal_todo/utils/time_format.dart';
+import 'package:talal_todo/widgets/common_textfield.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  test('formatTaskTime uses a 12-hour clock', () {
+    expect(formatTaskTime(const TimeOfDay(hour: 14, minute: 5)), '2:05 PM');
+    expect(formatTaskTime(const TimeOfDay(hour: 0, minute: 0)), '12:00 AM');
+    expect(formatTaskTime(const TimeOfDay(hour: 12, minute: 30)), '12:30 PM');
+    expect(formatTaskTime(const TimeOfDay(hour: 9, minute: 7)), '9:07 AM');
+  });
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+  testWidgets('password field toggles visibility', (tester) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CommonTextField(
+            controller: controller,
+            hintText: 'Password',
+            isPassword: true,
+          ),
+        ),
+      ),
+    );
+
+    TextField field() => tester.widget<TextField>(find.byType(TextField));
+
+    expect(field().obscureText, isTrue);
+    await tester.tap(find.byIcon(Icons.visibility_off_outlined));
     await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(field().obscureText, isFalse);
   });
 }

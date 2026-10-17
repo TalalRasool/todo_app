@@ -1,124 +1,188 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart'; // 🔴 Yeh import sab se zaroori hai
-import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
+import 'package:talal_todo/controller.dart/todo_controller.dart';
 import 'package:talal_todo/routes/route_names.dart';
+import 'package:talal_todo/utils/app_snackbar.dart';
 
 class AuthController extends GetxController {
-  // Poori app mein is controller ko access karne ke liye instance
-  static AuthController instance = Get.find(); 
-  
-  final FirebaseAuth auth = FirebaseAuth.instance;
-  
-  // Loading state 
-  var isLoading = false.obs;
-final FirebaseAuth _auth = FirebaseAuth.instance;
+  /// Set only by a successful sign-in or sign-up. The main screen consumes it once.
+  static bool pendingWelcomeNotification = false;
+  static String? pendingWelcomeName;
+
+  final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
- // ==========================================
-  // SIGN UP FUNCTION (Fixed Navigation & Loading)
-  // ==========================================
-  Future<void> signUp(String name, String email, String password) async {
-    try {
-      // 🔴 Loading start karein taa ke UI mein spinner nazar aaye
-      isLoading.value = true; 
+  final isLoading = false.obs;
 
-      // 1. Firebase Auth mein account banayen
-      UserCredential userCredential = await _auth.createUserWithEmailAndPassword(
-        email: email,
+  Future<void> signUp(String name, String email, String password) async {
+    if (isLoading.value) return;
+
+    try {
+      isLoading.value = true;
+
+      final userCredential = await _auth.createUserWithEmailAndPassword(
+        email: email.trim(),
         password: password,
       );
 
-      String uid = userCredential.user!.uid;
+      final uid = userCredential.user?.uid;
+      if (uid == null) {
+        AppSnackbar.error('Error', 'Account could not be created.');
+        return;
+      }
 
-      // 2. User ka Name aur Email Firestore database mein save karein
-      await _firestore.collection('users').doc(uid).set({
-        'name': name,
-        'email': email,
+      final trimmedName = name.trim();
+      final createdUser = userCredential.user;
+      if (createdUser != null) {
+        unawaited(createdUser.updateDisplayName(trimmedName));
+      }
+      _saveUserProfile(uid, {
+        'name': trimmedName,
+        'email': email.trim(),
         'uid': uid,
-        'createdAt': FieldValue.serverTimestamp(),
+        'createdAt': Timestamp.now(),
       });
 
-      Get.snackbar(
-        "Success", 
-        "Account created successfully!", 
-        backgroundColor: Colors.green.shade100, 
-        colorText: Colors.green.shade900
-      );
-          
-      // 🔴 FIX: Account banne ke baad Main Screen par automatically move kar dein
-      Get.offAllNamed(RouteNames.mainscreen); 
-
-    } catch (e) {
-      Get.snackbar(
-        "Error", 
-        e.toString(), 
-        backgroundColor: Colors.redAccent, 
-        colorText: Colors.white
-      );
-    } finally {
-      // 🔴 Loading khatam karein
-      isLoading.value = false;
-    }
-  }
-  Future<void> signIn(String email, String password) async {
-    try {
-      isLoading.value = true;
-      
-      await auth.signInWithEmailAndPassword(email: email, password: password);
-      
-      Get.snackbar(
-        "Success", 
-        "Signed in successfully!",
-        backgroundColor: Colors.green.shade100,
-        colorText: Colors.green.shade900,
-        snackPosition: SnackPosition.BOTTOM,
-      );
-      
+      pendingWelcomeNotification = true;
+      pendingWelcomeName = trimmedName;
       Get.offAllNamed(RouteNames.mainscreen);
-      
+      AppSnackbar.success('Success', 'Account created successfully.');
     } on FirebaseAuthException catch (e) {
-      Get.snackbar(
-        "Login Failed", 
-        e.message ?? "Invalid email or password",
-        backgroundColor: Colors.redAccent,
-        colorText: Colors.redAccent,
-        snackPosition: SnackPosition.BOTTOM,
-      );
+      debugPrint('Sign up failed: ${e.code}');
+      AppSnackbar.error('Sign up failed', _authErrorMessage(e));
+    } catch (e) {
+      debugPrint('Sign up failed: $e');
+      AppSnackbar.error('Sign up failed', 'Something went wrong. Please try again.');
     } finally {
       isLoading.value = false;
     }
   }
 
+  Future<void> signIn(String email, String password) async {
+    if (isLoading.value) return;
 
- Future<void> forgetPassword(String email) async {
     try {
       isLoading.value = true;
-      
-      await auth.sendPasswordResetEmail(email: email);
-      
-      Get.snackbar(
-        "Link Sent", 
-        "Password reset link has been sent to your email!",
-        backgroundColor: Colors.green.shade100,
-        colorText: Colors.green.shade900,
-        snackPosition: SnackPosition.BOTTOM,
+      final credential = await _auth.signInWithEmailAndPassword(
+        email: email.trim(),
+        password: password,
       );
-      
-      // Agar pehle se sign in page par hain toh dobara route push karne ki zaroorat nahi.
-      // Lekin aap Get.back() kar sakte hain taa ke popup dialog band ho jaye.
-      Get.back();
-      
+      final signedInUser = credential.user;
+      if (signedInUser != null) {
+        unawaited(_saveNameIfMissing(signedInUser));
+      }
+      pendingWelcomeNotification = true;
+      pendingWelcomeName = null;
+      Get.offAllNamed(RouteNames.mainscreen);
+      AppSnackbar.success('Success', 'Signed in successfully.');
     } on FirebaseAuthException catch (e) {
-      Get.snackbar(
-        "Error", 
-        e.message ?? "Could not send reset link",
-        backgroundColor: Colors.redAccent,
-        colorText: Colors.white, // 🔴 Isko white kar diya taa ke parha jaye
-        snackPosition: SnackPosition.BOTTOM,
-      );
+      debugPrint('Sign in failed: ${e.code}');
+      AppSnackbar.error('Login failed', _authErrorMessage(e));
+    } catch (e) {
+      debugPrint('Sign in failed: $e');
+      AppSnackbar.error('Login failed', 'Something went wrong. Please try again.');
     } finally {
       isLoading.value = false;
+    }
+  }
+
+  Future<void> forgetPassword(String email) async {
+    if (isLoading.value) return;
+
+    try {
+      isLoading.value = true;
+      await _auth.sendPasswordResetEmail(email: email.trim());
+      Get.back();
+      AppSnackbar.success(
+        'Link sent',
+        'Password reset link has been sent to your email.',
+      );
+    } on FirebaseAuthException catch (e) {
+      debugPrint('Password reset failed: ${e.code}');
+      AppSnackbar.error('Error', _authErrorMessage(e));
+    } catch (e) {
+      debugPrint('Password reset failed: $e');
+      AppSnackbar.error('Error', 'Could not send the reset link.');
+    } finally {
+      isLoading.value = false;
+    }
+  }
+
+  void _saveUserProfile(String uid, Map<String, dynamic> data) {
+    unawaited(
+      _firestore.collection('users').doc(uid).set(data, SetOptions(merge: true)).then<void>(
+        (_) {},
+        onError: (Object e, StackTrace _) {
+          debugPrint('Could not save profile: $e');
+        },
+      ),
+    );
+  }
+
+  /// Copies a Google account name, or an existing display name, when the
+  /// profile document does not already have a name.
+  Future<void> _saveNameIfMissing(User user) async {
+    final uid = user.uid;
+    try {
+      final cached = await _firestore.collection('users').doc(uid).get(
+        const GetOptions(source: Source.cache),
+      );
+      final existing = (cached.data()?['name'] as String?)?.trim() ?? '';
+      if (existing.isNotEmpty) return;
+    } catch (e) {
+      debugPrint('No cached profile: $e');
+    }
+
+    var name = '';
+    for (final info in user.providerData) {
+      if (info.providerId != 'google.com') continue;
+      final value = info.displayName?.trim() ?? '';
+      if (value.isNotEmpty) {
+        name = value;
+        break;
+      }
+    }
+    if (name.isEmpty) {
+      name = user.displayName?.trim() ?? '';
+    }
+    if (name.isEmpty) return;
+
+    unawaited(user.updateDisplayName(name));
+    _saveUserProfile(uid, {
+      'name': name,
+      'uid': uid,
+      'email': user.email,
+    });
+    if (Get.isRegistered<TodoController>() &&
+        Get.find<TodoController>().userName.value.trim().isEmpty) {
+      Get.find<TodoController>().userName.value = name;
+    }
+  }
+
+  String _authErrorMessage(FirebaseAuthException e) {
+    switch (e.code) {
+      case 'invalid-email':
+        return 'Enter a valid email address.';
+      case 'user-disabled':
+        return 'This account has been disabled.';
+      case 'user-not-found':
+      case 'wrong-password':
+      case 'invalid-credential':
+        return 'Incorrect email or password.';
+      case 'email-already-in-use':
+        return 'An account already exists for that email.';
+      case 'weak-password':
+        return 'Password must be at least 6 characters.';
+      case 'too-many-requests':
+        return 'Too many attempts. Please try again later.';
+      case 'network-request-failed':
+        return 'Check your internet connection and try again.';
+      default:
+        return e.message ?? 'Something went wrong. Please try again.';
     }
   }
 }

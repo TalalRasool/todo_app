@@ -6,6 +6,6 @@ class AppImages {
   static const String forget = 'assets/images/forget.png';
   static const String signin = 'assets/images/signin.png';
   static const String splash = 'assets/images/splash.png';
-    static const String logo = 'assets/images/logo.jpg';
+    static const String logo = 'assets/logo.jpg';
 
 }
