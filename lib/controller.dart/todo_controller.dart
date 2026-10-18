@@ -11,6 +11,40 @@ import 'package:talal_todo/services/notification_service.dart';
 import 'package:talal_todo/utils/app_snackbar.dart';
 import 'package:talal_todo/utils/time_format.dart';
 
+class TodoTask {
+  final String id;
+  final String title;
+  final String description;
+  final String time;
+  final bool isCompleted;
+  final DateTime createdAt;
+
+  const TodoTask({
+    required this.id,
+    required this.title,
+    required this.description,
+    required this.time,
+    required this.isCompleted,
+    required this.createdAt,
+  });
+
+  TodoTask copyWith({
+    String? title,
+    String? description,
+    String? time,
+    bool? isCompleted,
+  }) {
+    return TodoTask(
+      id: id,
+      title: title ?? this.title,
+      description: description ?? this.description,
+      time: time ?? this.time,
+      isCompleted: isCompleted ?? this.isCompleted,
+      createdAt: createdAt,
+    );
+  }
+}
+
 class TodoController extends GetxController {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -19,11 +53,26 @@ class TodoController extends GetxController {
   final userName = ''.obs;
   final profileImageUrl = ''.obs;
   final isUploading = false.obs;
+  final tasks = <TodoTask>[].obs;
+  final tasksReady = false.obs;
+
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _todoSub;
+  String? _listeningUid;
+  final Map<String, TodoTask> _remoteTasks = {};
+  final Map<String, TodoTask> _localTasks = {};
+  final Set<String> _deletedIds = {};
 
   @override
   void onInit() {
     super.onInit();
     fetchUserData();
+    watchTodos();
+  }
+
+  @override
+  void onClose() {
+    _todoSub?.cancel();
+    super.onClose();
   }
 
   Future<void> addTodo(String title, String description) async {
@@ -39,18 +88,28 @@ class TodoController extends GetxController {
       1 << 30,
     );
 
+    final createdAt = DateTime.now();
+    final ref = _firestore.collection('users').doc(uid).collection('todos').doc();
+    final task = TodoTask(
+      id: ref.id,
+      title: title,
+      description: description,
+      time: formatTaskTime(TimeOfDay.now()),
+      isCompleted: false,
+      createdAt: createdAt,
+    );
+
     try {
       isLoading.value = true;
-      // A client timestamp is visible to orderBy immediately. serverTimestamp
-      // stays null until the server answers, so the new task was hidden offline.
+      _putLocalTask(task);
       _writeInBackground(
-        _firestore.collection('users').doc(uid).collection('todos').add({
+        ref.set({
           'title': title,
           'description': description,
-          'time': formatTaskTime(TimeOfDay.now()),
+          'time': task.time,
           'isCompleted': false,
           'notificationId': notificationId,
-          'createdAt': Timestamp.now(),
+          'createdAt': Timestamp.fromDate(createdAt),
         }),
       );
       unawaited(
@@ -70,18 +129,37 @@ class TodoController extends GetxController {
     }
   }
 
-  Stream<QuerySnapshot<Map<String, dynamic>>> getTodos() {
+  void watchTodos() {
     final uid = _auth.currentUser?.uid;
     if (uid == null) {
-      return const Stream<QuerySnapshot<Map<String, dynamic>>>.empty();
+      _todoSub?.cancel();
+      _todoSub = null;
+      _listeningUid = null;
+      tasks.clear();
+      _remoteTasks.clear();
+      _localTasks.clear();
+      _deletedIds.clear();
+      tasksReady.value = true;
+      return;
     }
+    if (_listeningUid == uid && _todoSub != null) return;
 
-    return _firestore
+    _listeningUid = uid;
+    _todoSub?.cancel();
+    _todoSub = _firestore
         .collection('users')
         .doc(uid)
         .collection('todos')
         .orderBy('createdAt', descending: true)
-        .snapshots();
+        .snapshots(includeMetadataChanges: true)
+        .listen(
+          _applySnapshot,
+          onError: (Object e) {
+            debugPrint('Todo stream error: $e');
+            tasksReady.value = true;
+            _publishTasks();
+          },
+        );
   }
 
   Future<void> deleteTodo(String docId) async {
@@ -93,6 +171,9 @@ class TodoController extends GetxController {
 
     try {
       final ref = _todoRef(uid, docId);
+      _deletedIds.add(docId);
+      _localTasks.remove(docId);
+      tasks.removeWhere((task) => task.id == docId);
       unawaited(_cancelReminder(ref));
       _writeInBackground(ref.delete());
       AppSnackbar.success('Deleted', 'Task removed.');
@@ -114,8 +195,22 @@ class TodoController extends GetxController {
       return;
     }
 
+    final index = tasks.indexWhere((task) => task.id == docId);
+    final current = index >= 0 ? tasks[index] : null;
+    final updated = (current ??
+            TodoTask(
+              id: docId,
+              title: newTitle,
+              description: newDesc,
+              time: '',
+              isCompleted: false,
+              createdAt: DateTime.now(),
+            ))
+        .copyWith(title: newTitle, description: newDesc);
+
     try {
       isLoading.value = true;
+      _putLocalTask(updated);
       _writeInBackground(
         _todoRef(uid, docId).update({
           'title': newTitle,
@@ -252,6 +347,7 @@ class TodoController extends GetxController {
       profileImageUrl.value = '';
       isLoading.value = false;
       isUploading.value = false;
+      watchTodos();
       Get.offAllNamed(RouteNames.signin);
     } catch (e) {
       debugPrint('Logout failed: $e');
@@ -269,6 +365,10 @@ class TodoController extends GetxController {
     try {
       final ref = _todoRef(uid, docId);
       final completed = !currentStatus;
+      final index = tasks.indexWhere((task) => task.id == docId);
+      if (index >= 0) {
+        _putLocalTask(tasks[index].copyWith(isCompleted: completed));
+      }
       _writeInBackground(ref.update({'isCompleted': completed}));
       if (completed) {
         unawaited(_cancelReminder(ref));
@@ -277,6 +377,64 @@ class TodoController extends GetxController {
       debugPrint('Could not update task status: $e');
       AppSnackbar.error('Error', 'Could not update task status.');
     }
+  }
+
+  void _putLocalTask(TodoTask task) {
+    _deletedIds.remove(task.id);
+    _localTasks[task.id] = task;
+    _publishTasks();
+  }
+
+  void _applySnapshot(QuerySnapshot<Map<String, dynamic>> snap) {
+    _remoteTasks
+      ..clear()
+      ..addAll({for (final doc in snap.docs) doc.id: _taskFromDoc(doc)});
+
+    for (final id in _deletedIds.toList()) {
+      if (!_remoteTasks.containsKey(id)) _deletedIds.remove(id);
+    }
+
+    for (final id in _localTasks.keys.toList()) {
+      final local = _localTasks[id]!;
+      final saved = _remoteTasks[id];
+      if (saved != null && _sameTask(saved, local)) {
+        _localTasks.remove(id);
+      }
+    }
+
+    _publishTasks();
+    tasksReady.value = true;
+  }
+
+  void _publishTasks() {
+    final merged = <String, TodoTask>{..._remoteTasks};
+    for (final entry in _localTasks.entries) {
+      merged[entry.key] = entry.value;
+    }
+    merged.removeWhere((id, _) => _deletedIds.contains(id));
+    final list = merged.values.toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    tasks.assignAll(list);
+  }
+
+  TodoTask _taskFromDoc(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data();
+    final created = data['createdAt'];
+    return TodoTask(
+      id: doc.id,
+      title: data['title'] as String? ?? 'No Title',
+      description: data['description'] as String? ?? 'No Description',
+      time: data['time'] as String? ?? '',
+      isCompleted: data['isCompleted'] == true,
+      createdAt: created is Timestamp ? created.toDate() : DateTime.now(),
+    );
+  }
+
+  bool _sameTask(TodoTask a, TodoTask b) {
+    return a.title == b.title &&
+        a.description == b.description &&
+        a.time == b.time &&
+        a.isCompleted == b.isCompleted;
   }
 
   void _writeInBackground<T>(Future<T> write) {

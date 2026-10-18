@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -20,14 +19,13 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   late final TodoController _todoController;
-  late final Stream<QuerySnapshot<Map<String, dynamic>>> _todosStream;
 
   @override
   void initState() {
     super.initState();
     _todoController = Get.put(TodoController());
     _todoController.fetchUserData();
-    _todosStream = _todoController.getTodos();
+    _todoController.watchTodos();
     _showWelcomeNotificationOnce();
   }
 
@@ -147,23 +145,16 @@ class _MainScreenState extends State<MainScreen> {
       );
     }
 
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _todosStream,
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          debugPrint('Todo stream error: ${snapshot.error}');
-        }
-
-        if (snapshot.connectionState == ConnectionState.waiting &&
-            !snapshot.hasData) {
+    return Obx(() {
+        final taskItems = _todoController.tasks.toList();
+        if (!_todoController.tasksReady.value && taskItems.isEmpty) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        final tasks = snapshot.data?.docs ?? [];
         var open = 0;
         var done = 0;
-        for (final task in tasks) {
-          if (task.data()['isCompleted'] == true) {
+        for (final task in taskItems) {
+          if (task.isCompleted) {
             done++;
           } else {
             open++;
@@ -193,7 +184,7 @@ class _MainScreenState extends State<MainScreen> {
               ),
             ),
             Expanded(
-              child: tasks.isEmpty
+              child: taskItems.isEmpty
                   ? Center(
                       child: Text(
                         'No tasks added yet',
@@ -205,16 +196,15 @@ class _MainScreenState extends State<MainScreen> {
                     )
                   : ListView.builder(
                       padding: EdgeInsets.fromLTRB(20.w, 0, 20.w, 96.h),
-                      itemCount: tasks.length,
+                      itemCount: taskItems.length,
                       itemBuilder: (context, index) {
-                        return _taskCard(tasks[index], index);
+                        return _taskCard(taskItems[index], index);
                       },
                     ),
             ),
           ],
         );
-      },
-    );
+    });
   }
 
   Widget _countChip(String label) {
@@ -277,13 +267,12 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  Widget _taskCard(QueryDocumentSnapshot<Map<String, dynamic>> task, int index) {
-    final taskData = task.data();
+  Widget _taskCard(TodoTask task, int index) {
     final docId = task.id;
-    final title = taskData['title'] as String? ?? 'No Title';
-    final description = taskData['description'] as String? ?? 'No Description';
-    final time = taskData['time'] as String? ?? '';
-    final isCompleted = taskData['isCompleted'] == true;
+    final title = task.title;
+    final description = task.description;
+    final time = task.time;
+    final isCompleted = task.isCompleted;
     final accent = AppColors.taskAccents[index % AppColors.taskAccents.length];
 
     return Container(
